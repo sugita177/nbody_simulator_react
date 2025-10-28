@@ -1,13 +1,13 @@
 // src/components/SimulationCanvas.tsx
 "use client"; // Next.jsに移行する際の準備として付けておくと良い
 
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { type Body } from '../types';
 import { updateSimulation } from '../utils/physics';
 
 // 描画のキャンバスサイズ
-const CANVAS_WIDTH = 800;
-const CANVAS_HEIGHT = 600;
+const CANVAS_WIDTH = 700;
+const CANVAS_HEIGHT = 420;
 
 // 初期天体データ (2体問題の例)
 const initialBodies: Body[] = [
@@ -26,6 +26,8 @@ const initialBodies: Body[] = [
 const SimulationCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
+  // ⭐ 実行状態 (true: 実行中 / false: 停止中) を管理する状態を追加
+  const [isRunning, setIsRunning] = useState(true);
   // シミュレーションの状態を管理する ref。Reactの再レンダリングを避けるため ref を使用。
   const bodiesRef = useRef<Body[]>(initialBodies);
   const lastTimeRef = useRef(performance.now());
@@ -65,26 +67,81 @@ const SimulationCanvas: React.FC = () => {
   };
 
   useEffect(() => {
-    // コンポーネントマウント時にループを開始
-    animationRef.current = requestAnimationFrame(animate);
+    if (isRunning) {
+      // 実行中の場合、アニメーションループを開始
+      animationRef.current = requestAnimationFrame(animate);
+    } else {
+      // 停止中の場合、アニメーションループを停止
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    }
     
-    // アンマウント時にループを停止
+    // クリーンアップ関数（コンポーネントがアンマウントされるとき、または状態が変更される直前）
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, []); 
+  }, [isRunning]); 
 
   return (
-    <div style={{ padding: 20, textAlign: 'center' }}>
-      <h1>重力シミュレーション (2体問題)</h1>
+    // 1. 全体を画面中央に配置するコンテナ
+    <div 
+      style={{
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center', // 水平方向の中央寄せ
+        // ⭐ 垂直パディングを最小限に減らし、不要な空白を削除
+        //    (上部10px, 左右20px, 下部10px)
+        padding: '10px 20px 10px 20px',
+        maxWidth: '900px', // ⭐ コンテンツの最大幅を制限 (14インチで見やすい幅)
+        width: '100%',     // 親要素（#root）の幅いっぱいに広がる
+        minHeight: '100vh', // 画面いっぱいの高さ
+        boxSizing: 'border-box',
+        backgroundColor: '#1E1E1E', // 背景を暗くしてシミュレーションを見やすく
+        // ⭐ 上部マージンを設定（例：画面の高さの2%〜3%）
+        //marginTop: '2vh',
+      }}
+    >
+      
+      {/* タイトル */}
+      <h1 style={{ color: '#fff', marginTop: '10px', marginBottom: '10px' }}>        🌌 重力シミュレーション
+      </h1>
+      
+      {/* 2. コントロールパネル (ボタン) */}
+      <div style={{ marginBottom: '20px' }}>
+        <button 
+          onClick={() => setIsRunning(!isRunning)} 
+          style={{
+            padding: '10px 20px', 
+            fontSize: '16px',
+            cursor: 'pointer',
+            backgroundColor: isRunning ? '#DC3545' : '#28A745', // 実行状態で色を変更
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            transition: 'background-color 0.3s'
+          }}
+        >
+          {isRunning ? '⏸️ シミュレーションを停止' : '▶️ シミュレーションを再開'}
+        </button>
+      </div>
+
+      {/* 3. キャンバス本体 */}
       <canvas 
         ref={canvasRef} 
         width={CANVAS_WIDTH} 
         height={CANVAS_HEIGHT} 
-        style={{ border: '1px solid #333', backgroundColor: 'black' }} 
+        style={{ 
+          border: '1px solid #444', 
+          backgroundColor: 'black',
+          boxShadow: '0 0 15px rgba(0, 0, 0, 0.5)' // キャンバスに影をつけて際立たせる
+        }} 
       />
+      
+      {/* 必要であれば、ここに解説や設定を追加するエリアを設ける */}
+
     </div>
   );
 };
