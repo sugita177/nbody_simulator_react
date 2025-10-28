@@ -14,11 +14,11 @@ const SimulationCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
 
-  // ⭐ 実行状態 (true: 実行中 / false: 停止中) を管理する状態を追加
+  // 実行状態 (true: 実行中 / false: 停止中) を管理する状態を追加
   const [isRunning, setIsRunning] = useState(true);
-  // ⭐ 軌道モードの状態を追加 (true: 永続軌道 / false: 残像モード)
+  // 軌道モードの状態を追加 (true: 永続軌道 / false: 残像モード)
   const [isTracing, setIsTracing] = useState(false);
-  // ⭐ 編集可能な初期状態を useState で管理
+  // 編集可能な初期状態を useState で管理
   const [editableBodies, setEditableBodies] = useState<Body[]>([
     {
       id: 1, mass: 1000, radius: 15, color: '#FFD700',
@@ -32,17 +32,10 @@ const SimulationCanvas: React.FC = () => {
     },
     // ここに3体目を追加することも可能
   ]);
-  // ⭐ 符号の状態を管理する新しい状態
-  const [signs, setSigns] = useState<Record<number, {
-      x: 1 | -1;
-      y: 1 | -1;
-      vx: 1 | -1;
-      vy: 1 | -1;
-  }>>({
-      // 初期値設定 (例: 天体1と天体2の初期符号)
-      1: { x: 1, y: 1, vx: 1, vy: 1 },
-      2: { x: 1, y: 1, vx: 1, vy: 1 },
-  });
+  // 入力文字列を一時的に保持する状態 (UI制御用)
+  const [inputStrings, setInputStrings] = useState<Record<number, {
+      x: string; y: string; vx: string; vy: string; mass: string;
+  }>>({});
 
   // シミュレーションの状態を管理する ref。Reactの再レンダリングを避けるため ref を使用。
   // bodiesRef の初期値を editableBodies に変更
@@ -63,18 +56,16 @@ const SimulationCanvas: React.FC = () => {
     // 現在の editableBodies の値を bodiesRef にコピーして再初期化
     // ❗ 参照が同じにならないよう、ディープコピー（新しい配列とオブジェクト）が必要です
     const newInitialState = editableBodies.map(body => {
-        const sign = signs[body.id]; // 該当天体の符号を取得
         
         return {
             ...body,
-            // ⭐ 符号を適用した値で初期化
             position: { 
-                x: body.position.x * sign.x, 
-                y: body.position.y * sign.y 
+                x: body.position.x, 
+                y: body.position.y,
             },
             velocity: { 
-                vx: body.velocity.vx * sign.vx, 
-                vy: body.velocity.vy * sign.vy 
+                vx: body.velocity.vx, 
+                vy: body.velocity.vy,
             },
         };
     });
@@ -198,9 +189,22 @@ const SimulationCanvas: React.FC = () => {
   useEffect(() => {
     // 最初のマウント時に初期状態を設定
     if (bodiesRef.current.length === 0) {
-        resetSimulation(); 
+        resetSimulation();
         setIsRunning(true);
     }
+
+    // editableBodies の初期値に基づいて inputStrings を設定
+    const initialStrings: Record<number, { x: string; y: string; vx: string; vy: string; mass: string; }> = {};
+    editableBodies.forEach(body => {
+        initialStrings[body.id] = {
+            x: body.position.x.toString(),
+            y: body.position.y.toString(),
+            vx: body.velocity.vx.toString(),
+            vy: body.velocity.vy.toString(),
+            mass: body.mass.toString(),
+        };
+    });
+    setInputStrings(initialStrings);
 
     if (isRunning) {
       // 実行中の場合、アニメーションループを開始
@@ -221,37 +225,35 @@ const SimulationCanvas: React.FC = () => {
     // ここではリセット操作の管理は不要だが、isRunningの変更でリセットされないよう注意
   }, [isRunning, isTracing]);
 
-  // 変更ハンドラ関数
-  const handleBodyChange = (id: number, field: 'mass' | 'radius' | 'vx' | 'vy' | 'x' | 'y', valueString: string) => {
+  // 新しい文字列入力ハンドラ
+  const handleInputChange = (id: number, field: keyof typeof inputStrings[1], valueString: string) => {
 
-      // 1. 空文字の場合の処理: 値を 0 に設定する
-      if (valueString === '') {
-          // 空欄にされた場合、その値を 0 と見なして状態を更新する
-          updateBodyValue(id, field, 0);
-          return; 
+      // 1. UI状態 (inputStrings) をまず更新（空欄や '-' を即座に表示）
+      setInputStrings(prev => ({
+          ...prev,
+          [id]: { ...prev[id], [field]: valueString }
+      }));
+
+      // 2. 数値として有効な場合にのみ editableBodies を更新
+      const value = parseFloat(valueString);
+
+      // 3. 無効な文字列（NaN、空文字、'-'）の場合、editableBodies の更新をスキップ
+      if (isNaN(value) || valueString === '-' || valueString === '') {
+          return;
       }
 
-      // 2. マイナス記号 ('-') の場合: 更新をスキップし、ユーザーの入力を一時的に許可する
-      if (valueString === '-') {
-          return; 
-      }
-
-      // 3. 有効な数値表現に変換
-      let value = parseFloat(valueString);
-
-      // 4. NaN の場合は無視
-      if (isNaN(value)) return; 
-
-      // 5. massは非負の絶対値、その他は絶対値で状態を更新
+      // 4. mass の負の値チェック
+      let finalValue = value;
       if (field === 'mass' && value < 0) {
-          value = 0; // 負の値の入力は 0 にする
+          finalValue = 0;
       }
 
-      // ⭐ 関数を抽出して可読性を高めますが、元のロジックを修正
-      updateBodyValue(id, field, Math.abs(value));
+      // 5. editableBodies を更新するロジックを呼び出す
+      updateBodyValue(id, field as any, finalValue); 
   };
 
-  // ⭐ NOTE: 以前の複雑なロジックを置き換えるためのヘルパー関数 (handleBodyChange内に記述するか、外部で定義)
+  // updateBodyValue 関数（元の handleBodyChange の実処理部分）
+  //    これは既存の editableBodies 更新ロジックを再利用
   const updateBodyValue = (id: number, field: 'mass' | 'radius' | 'vx' | 'vy' | 'x' | 'y', value: number) => {
       setEditableBodies(prevBodies => 
           prevBodies.map(body => {
@@ -272,16 +274,6 @@ const SimulationCanvas: React.FC = () => {
       );
   };
 
-  // ⭐ 符号変更ハンドラ
-  const handleSignChange = (bodyId: number, field: 'x' | 'y' | 'vx' | 'vy', signValue: string) => {
-      setSigns(prevSigns => ({
-          ...prevSigns,
-          [bodyId]: {
-              ...prevSigns[bodyId],
-              [field]: parseInt(signValue) as 1 | -1 // '1'または'-1'の文字列を数値に変換
-          }
-      }));
-  };
 
   return (
     <div 
@@ -298,52 +290,15 @@ const SimulationCanvas: React.FC = () => {
     >
       
       {/* 1. タイトル */}
-      <h1 style={{ color: '#fff', marginTop: '10px', marginBottom: '20px' }}>
+      <h1 style={{ color: '#fff', marginTop: '20px', marginBottom: '20px' }}>
         🌌 重力シミュレーション
       </h1>
       
-      {/* 2. メインコントロールボタン群 */}
-      <div style={{ marginBottom: '20px' }}>
-        {/* 停止・再開ボタン */}
-        <button 
-          onClick={() => setIsRunning(!isRunning)} 
-          style={{
-            padding: '10px 20px', 
-            fontSize: '16px',
-            cursor: 'pointer',
-            backgroundColor: isRunning ? '#DC3545' : '#28A745', 
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            transition: 'background-color 0.3s'
-          }}
-        >
-          {isRunning ? '⏸️ シミュレーションを停止' : '▶️ シミュレーションを再開'}
-        </button>
-        
-        {/* 軌道モード切替ボタン */}
-        <button 
-          onClick={() => setIsTracing(!isTracing)}
-          style={{
-            padding: '10px 20px', 
-            fontSize: '16px',
-            cursor: 'pointer',
-            backgroundColor: isTracing ? '#007BFF' : '#6C757D', 
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            transition: 'background-color 0.3s',
-            marginLeft: '10px' 
-          }}
-        >
-          {isTracing ? '🔄 残像モード' : '✏️ 永続軌道'}
-        </button>
-      </div>
 
-      {/* 3. キャンバスとコントロールパネルを並べるコンテナ (水平Flex) */}
+      {/* 2. キャンバスとコントロールパネルを並べるコンテナ (水平Flex) */}
       <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', maxWidth: '100%', width: '100%' }}> 
           
-          {/* 3-A. キャンバスエリア (左側) */}
+          {/* 2-A. キャンバスエリア (左側) */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
               <canvas 
                   ref={canvasRef} 
@@ -356,7 +311,7 @@ const SimulationCanvas: React.FC = () => {
                   }} 
               />
           </div>
-        {/* 3-B. コントロールパネル (右側) */}
+        {/* 2-B. コントロールパネル (右側) */}
         <div 
             style={{ 
                 margin: '0',
@@ -368,15 +323,66 @@ const SimulationCanvas: React.FC = () => {
                 maxWidth: '450px', 
             }}
         >
+            {/* メインコントロールボタン群 */}
+            <div 
+                style={{ 
+                    marginTop: '0px',     // 上部の余白は不要（パネル上端に合わせる）
+                    marginBottom: '15px', // 天体設定ヘッダーとの間に適切な隙間を確保
+                    display: 'flex', 
+                    flexWrap: 'wrap',
+                    justifyContent: 'space-between'
+                }}
+            >
+              {/* 停止・再開ボタン */}
+              <button 
+                onClick={() => setIsRunning(!isRunning)} 
+                style={{
+                  cursor: 'pointer',
+                  backgroundColor: isRunning ? '#DC3545' : '#28A745', 
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '5px',
+                  transition: 'background-color 0.3s',
+                  flexGrow: 0, 
+                  width: 'calc(100% - 5px)', 
+                  padding: '8px 12px', 
+                  fontSize: '14px',
+                  boxSizing: 'border-box', // 幅にパディング等を含める
+                }}
+              >
+                {isRunning ? '⏸️ シミュレーションを停止' : '▶️ シミュレーションを再開'}
+              </button>
+              
+              {/* 軌道モード切替ボタン */}
+              <button 
+                onClick={() => setIsTracing(!isTracing)}
+                style={{
+                  cursor: 'pointer',
+                  backgroundColor: isTracing ? '#007BFF' : '#6C757D', 
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '5px',
+                  transition: 'background-color 0.3s',
+                  flexGrow: 0, 
+                  width: 'calc(100% - 5px)', 
+                  padding: '8px 12px', 
+                  fontSize: '14px',
+                  boxSizing: 'border-box', // 幅にパディング等を含める
+                  marginTop: '10px',
+                }}
+              >
+                {isTracing ? '🔄 残像モード' : '✏️ 永続軌道'}
+              </button>
+            </div>
+
             <h2 style={{ color: '#fff', fontSize: '1.1rem', margin: '0 0 8px 0' }}>設定変更</h2>
-          
-            {/* ⭐ 新しい Flex コンテナ: 天体パネルを水平に並べる */}
+            {/* 新しい Flex コンテナ: 天体パネルを水平に並べる */}
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between' }}>
 
                 {editableBodies.map(body => (
                     <div 
                         key={body.id} 
-                        // ⭐ flex: 1 0 0 で利用可能なスペースを均等に分割
+                        // flex: 1 0 0 で利用可能なスペースを均等に分割
                         style={{ flex: '1 0 0', 
                             // 以前のボーダーとパディングを維持
                             padding: '5px', 
@@ -384,8 +390,26 @@ const SimulationCanvas: React.FC = () => {
                             borderRadius: '5px' 
                         }}
                     >
-                        <div style={{ color: body.color, fontWeight: 'bold', width: '100%', fontSize: '0.9rem', marginBottom: '5px' }}>
-                            天体 {body.id} ({body.color})
+                        <div 
+                            style={{ 
+                                color: body.color, 
+                                display: 'flex', 
+                                fontWeight: 'bold', 
+                                fontSize: '0.9rem', 
+                                marginBottom: '5px',
+                                // 天体 ID と色コードを両端に寄せるための設定を追加
+                                justifyContent: 'space-between' ,
+                                // 最小幅を設定し、改行を防ぐ
+                                minWidth: '100px', 
+                                // テキストが折り返さないように設定
+                                whiteSpace: 'nowrap'
+                            }}
+                        >
+                            {/* 1. 天体 ID を span で囲む */}
+                            <span>天体 {body.id}</span> 
+
+                            {/* 2. 色コードを別の span で囲む (fontWeight を normal にして目立たなくする) */}
+                            <span style={{ fontWeight: 'normal' }}>({body.color})</span>
                         </div>
 
                         {/* 内部の入力フィールドを縦に配置する Flex/Block コンテナ */}
@@ -393,45 +417,67 @@ const SimulationCanvas: React.FC = () => {
 
                             {/* 質量 */}
                             <label style={{ color: '#ccc', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between' }}>M: 
-                                <input type="number" value={body.mass === 0 ? '' : body.mass} min="0" onChange={e => handleBodyChange(body.id, 'mass', e.target.value)} style={{ width: '60px', padding: '3px' }} disabled={isRunning} />
+                            <input 
+                                type="number" 
+                                // value は inputStrings から取得し、存在しない場合は空文字列
+                                value={inputStrings[body.id]?.mass || ''} 
+                                // onChange は handleInputChange を呼び出す
+                                onChange={e => handleInputChange(body.id, 'mass', e.target.value)} 
+                                style={{ width: '60px', padding: '3px' }} 
+                                disabled={isRunning} 
+                            />
                             </label>
 
                             {/* X位置 */}
                             <label style={{ color: '#ccc', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between' }}>X : 
-                                {/* ⭐ 符号ドロップダウン */}
-                                <select value={signs[body.id].x} onChange={e => handleSignChange(body.id, 'x', e.target.value)} style={{ marginRight: '5px', padding: '3px' }} disabled={isRunning}>
-                                    <option value={1}>+</option>
-                                    <option value={-1}>-</option>
-                                </select>
-                                {/* 絶対値入力 */}
-                                <input type="number" value={body.position.x === 0 ? '' : body.position.x} min="0" onChange={e => handleBodyChange(body.id, 'x', e.target.value)} style={{ width: '60px', padding: '3px' }} disabled={isRunning} />
+                                <input 
+                                    type="number" 
+                                    // value は inputStrings から取得し、存在しない場合は空文字列
+                                    value={inputStrings[body.id]?.x || ''} 
+                                    // onChange は handleInputChange を呼び出す
+                                    onChange={e => handleInputChange(body.id, 'x', e.target.value)} 
+                                    style={{ width: '60px', padding: '3px' }} 
+                                    disabled={isRunning} 
+                                />
                             </label>
                       
                             {/* Y位置 */}
                             <label style={{ color: '#ccc', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between' }}>Y : 
-                                <select value={signs[body.id].y} onChange={e => handleSignChange(body.id, 'y', e.target.value)} style={{ marginRight: '5px', padding: '3px' }} disabled={isRunning}>
-                                    <option value={1}>+</option>
-                                    <option value={-1}>-</option>
-                                </select>
-                                <input type="number" value={body.position.y === 0 ? '' : body.position.y} min="0" onChange={e => handleBodyChange(body.id, 'y', e.target.value)} style={{ width: '60px', padding: '3px' }} disabled={isRunning} />
+                                <input 
+                                    type="number" 
+                                    // value は inputStrings から取得し、存在しない場合は空文字列
+                                    value={inputStrings[body.id]?.y || ''} 
+                                    // onChange は handleInputChange を呼び出す
+                                    onChange={e => handleInputChange(body.id, 'y', e.target.value)} 
+                                    style={{ width: '60px', padding: '3px' }} 
+                                    disabled={isRunning} 
+                                />
                             </label>
 
                             {/* X速度 */}
                             <label style={{ color: '#ccc', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between' }}>Vx: 
-                                <select value={signs[body.id].vx} onChange={e => handleSignChange(body.id, 'vx', e.target.value)} style={{ marginRight: '5px', padding: '3px' }} disabled={isRunning}>
-                                  <option value={1}>+</option>
-                                  <option value={-1}>-</option>
-                                </select>
-                                <input type="number" value={body.velocity.vx === 0 ? '' : body.velocity.vx} min="0" onChange={e => handleBodyChange(body.id, 'vx', e.target.value)} style={{ width: '60px', padding: '3px' }} disabled={isRunning} />
+                                <input 
+                                    type="number" 
+                                    // value は inputStrings から取得し、存在しない場合は空文字列
+                                    value={inputStrings[body.id]?.vx || ''} 
+                                    // onChange は handleInputChange を呼び出す
+                                    onChange={e => handleInputChange(body.id, 'vx', e.target.value)} 
+                                    style={{ width: '60px', padding: '3px' }} 
+                                    disabled={isRunning} 
+                                />
                             </label>
                       
                             {/* Y速度 */}
                             <label style={{ color: '#ccc', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between' }}>Vy: 
-                                <select value={signs[body.id].vy} onChange={e => handleSignChange(body.id, 'vy', e.target.value)} style={{ marginRight: '5px', padding: '3px' }} disabled={isRunning}>
-                                    <option value={1}>+</option>
-                                    <option value={-1}>-</option>
-                                </select>
-                                <input type="number" value={body.velocity.vy === 0 ? '' : body.velocity.vy} min="0" onChange={e => handleBodyChange(body.id, 'vy', e.target.value)} style={{ width: '60px', padding: '3px' }} disabled={isRunning} />
+                                <input 
+                                    type="number" 
+                                    // value は inputStrings から取得し、存在しない場合は空文字列
+                                    value={inputStrings[body.id]?.vy || ''} 
+                                    // onChange は handleInputChange を呼び出す
+                                    onChange={e => handleInputChange(body.id, 'vy', e.target.value)} 
+                                    style={{ width: '60px', padding: '3px' }} 
+                                    disabled={isRunning} 
+                                />
                             </label>
                         </div>
                     </div>
