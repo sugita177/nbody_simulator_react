@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  frontend:
+    # 2.で作成したDockerfileを指定し、イメージをビルドする
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # コンテナ名を設定
+    container_name: nbody-simulator-frontend
+    # ホストPCのポートとコンテナのポートをマッピング
+    ports:
+      - "5173:5173"
+    # ホストPCの現在のディレクトリ（ソースコード）をコンテナ内の /app にマウント
+    # これにより、ホストPCでコードを変更するとコンテナ内のファイルも即座に更新される（ホットリロードに必須）
+    volumes:
+      - .:/app
+      # ノードモジュールはコンテナ内で管理されるため、上書きされないよう除外
+      - /app/node_modules 
+    # WSL2環境下でホットリロードを安定させるためのオプション
+    # 参考: https://vitejs.dev/config/server-options.html#server-watch
+    environment:
+      - CHOKIDAR_USEPOLLING=true
