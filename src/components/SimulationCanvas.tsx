@@ -26,11 +26,18 @@ const initialBodies: Body[] = [
 const SimulationCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
+
   // ⭐ 実行状態 (true: 実行中 / false: 停止中) を管理する状態を追加
   const [isRunning, setIsRunning] = useState(true);
+  // ⭐ 軌道モードの状態を追加 (true: 永続軌道 / false: 残像モード)
+  const [isTracing, setIsTracing] = useState(false);
+
   // シミュレーションの状態を管理する ref。Reactの再レンダリングを避けるため ref を使用。
   const bodiesRef = useRef<Body[]>(initialBodies);
   const lastTimeRef = useRef(performance.now());
+
+  // ⭐ 天体の過去の位置 (軌跡) を記憶するための履歴データ
+  const historyRef = useRef<Record<number, { x: number, y: number }[]>>({});
 
   // 描画処理とアニメーションループ
   const animate = (currentTime: number) => {
@@ -40,13 +47,88 @@ const SimulationCanvas: React.FC = () => {
 
     // --- 1. 物理演算の実行 ---
     // ここでは単純な deltaTime は使わず、固定タイムステップで計算
-    bodiesRef.current = updateSimulation(bodiesRef.current);
+    const newBodies = updateSimulation(bodiesRef.current);
+    bodiesRef.current = newBodies;
+
+    // ⭐ 履歴の更新
+    newBodies.forEach(body => {
+      if (!historyRef.current[body.id]) {
+        historyRef.current[body.id] = [];
+      }
+      // 履歴に現在の位置を追加
+      historyRef.current[body.id].push({ 
+          x: body.position.x, 
+          y: body.position.y 
+      });
+      // 履歴が長くなりすぎないように制限 (例: 500点)
+      if (historyRef.current[body.id].length > 500) {
+        historyRef.current[body.id].shift();
+      }
+    });
 
     // --- 2. 画面の描画 ---
     
-    // 軌跡を残すために、半透明な矩形を重ねて過去の描画を薄くする
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)'; 
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    // 永続軌道モード: 完全クリア
+    if (isTracing) {
+      ctx.fillStyle = 'black'; 
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); 
+    } else {
+      // 残像モード: 半透明クリア
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.1)'; 
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+    
+    // ⭐ 永続軌道モードでの軌跡の描画 (線)
+    if (isTracing) {
+      // 全天体について履歴を描画
+      Object.keys(historyRef.current).forEach(id => {
+        const bodyId = parseInt(id);
+        const history = historyRef.current[bodyId];
+        const body = bodiesRef.current.find(b => b.id === bodyId);
+        if (!body || history.length < 2) return;
+
+        // 線の太さを設定
+        ctx.lineWidth = 1.5; // 少し太くしてグラデーション効果を見やすく
+
+        // 最初の点から最後の点まで、セグメントごとに描画する
+        for (let i = 1; i < history.length; i++) {
+          const startPoint = history[i - 1];
+          const endPoint = history[i];
+
+          // 履歴の長さ (history.length) を使って不透明度を計算
+          // i が大きいほど（最新ほど）不透明度が高くなるようにする
+          const opacity = i / history.length;
+          
+          // 天体色をRGBに変換し、不透明度を適用（ここではbody.colorがCSS色コードと仮定）
+          // 簡易的な色設定として、ここでは不透明度のみを調整します
+          // 複雑な色調整を避けるため、既存の天体色に不透明度を適用するロジックを使用
+          
+          // 例: 天体色が白っぽい（#ADD8E6）場合、RGBAで表現
+          // 注: body.colorがHEXコードの場合、この処理は別途変換関数が必要です。
+          // 暫定的に、天体色に合わせた固定の軌道色を使用します。
+          
+          const pathColor = body.color === '#FFD700' ? '255, 215, 0' : '173, 216, 230'; // 黄色または水色 (R, G, B)
+
+          ctx.strokeStyle = `rgba(${pathColor}, ${opacity.toFixed(2)})`;
+          
+          // パスの開始
+          ctx.beginPath();
+          
+          // 座標変換 (前の点)
+          const startX = CANVAS_WIDTH / 2 + startPoint.x;
+          const startY = CANVAS_HEIGHT / 2 - startPoint.y;
+          ctx.moveTo(startX, startY);
+
+          // 座標変換 (現在の点)
+          const endX = CANVAS_WIDTH / 2 + endPoint.x;
+          const endY = CANVAS_HEIGHT / 2 - endPoint.y;
+          ctx.lineTo(endX, endY);
+          
+          // 線を描画
+          ctx.stroke();
+        }
+      });
+    }
 
     // 天体の描画
     bodiesRef.current.forEach((body: Body) => {
@@ -83,7 +165,7 @@ const SimulationCanvas: React.FC = () => {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [isRunning]); 
+  }, [isRunning, isTracing]); 
 
   return (
     // 1. 全体を画面中央に配置するコンテナ
@@ -125,6 +207,24 @@ const SimulationCanvas: React.FC = () => {
           }}
         >
           {isRunning ? '⏸️ シミュレーションを停止' : '▶️ シミュレーションを再開'}
+        </button>
+
+        {/* ⭐ 軌道モード切替ボタンを追加 */}
+        <button 
+          onClick={() => setIsTracing(!isTracing)}
+          style={{
+            padding: '10px 20px', 
+            fontSize: '16px',
+            cursor: 'pointer',
+            backgroundColor: isTracing ? '#007BFF' : '#6C757D', // 選択状態で色を変更
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            transition: 'background-color 0.3s',
+            marginLeft: '10px' // ボタン間にスペース
+          }}
+        >
+          {isTracing ? '🔄 残像モード' : '✏️ 永続軌道'}
         </button>
       </div>
 
