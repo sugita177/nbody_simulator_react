@@ -1,7 +1,7 @@
 // src/components/SimulationCanvas.tsx
 "use client"; // Next.jsに移行する際の準備として付けておくと良い
 
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { type Body } from '../types';
 import { updateSimulation } from '../utils/physics';
 
@@ -9,29 +9,55 @@ import { updateSimulation } from '../utils/physics';
 const CANVAS_WIDTH = 700;
 const CANVAS_HEIGHT = 420;
 
+// 任意の数の天体を生成するヘルパー関数
+const createBody = (id: number, initialMass: number, initialX: number, initialY: number, initialVx: number, initialVy: number, radius: number = 5): Body => ({
+    id: id,
+    position: { x: initialX, y: initialY },
+    velocity: { vx: initialVx, vy: initialVy },
+    mass: initialMass,
+    radius: radius,
+    color: id === 1 ? '#FFD700' : (id === 2 ? '#ADD8E6' : (id === 3 ? '#90EE90' : '#FF6347')), // 3体目以降の色を追加
+});
+
+/**
+ * 天体の数に応じて初期状態を定義する関数
+ * @param count 
+ * @returns 
+ */
+const getInitialState = (count: number): Body[] => {
+    if (count === 2) {
+        // 2体問題の例: 中心を周回する安定軌道
+        return [
+            // 天体 1 (中心の重い星)
+            createBody(1, 1000, 0, 0, 0, 0, 8), 
+            // 天体 2 (周回する星)
+            createBody(2, 1, 150, 0, 0, 3, 4), 
+        ];
+    }
+    // 3体問題の例: (ユーザーが提供した初期設定に近いもの)
+    return [
+        // 天体 1 
+        createBody(1, 500, 0, 0, 0, 0),
+        // 天体 2 
+        createBody(2, 500, 100, 0, 0, 2),
+        // 天体 3 
+        createBody(3, 500, -100, 0, 0, -2), 
+    ];
+};
+
 
 const SimulationCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
 
+  // 天体の数を選択する状態を追加 (初期値は3)
+  const [numBodies, setNumBodies] = useState(3);
   // 実行状態 (true: 実行中 / false: 停止中) を管理する状態を追加
   const [isRunning, setIsRunning] = useState(true);
   // 軌道モードの状態を追加 (true: 永続軌道 / false: 残像モード)
   const [isTracing, setIsTracing] = useState(false);
   // 編集可能な初期状態を useState で管理
-  const [editableBodies, setEditableBodies] = useState<Body[]>([
-    {
-      id: 1, mass: 1000, radius: 15, color: '#FFD700',
-      position: { x: 0, y: 0 },
-      velocity: { vx: 0, vy: 0 },
-    },
-    {
-      id: 2, mass: 1, radius: 5, color: '#ADD8E6',
-      position: { x: 200, y: 0 },
-      velocity: { vx: 0, vy: 2 },
-    },
-    // ここに3体目を追加することも可能
-  ]);
+  const [editableBodies, setEditableBodies] = useState<Body[]>(getInitialState(3));
   // 入力文字列を一時的に保持する状態 (UI制御用)
   const [inputStrings, setInputStrings] = useState<Record<number, {
       x: string; y: string; vx: string; vy: string; mass: string;
@@ -43,8 +69,46 @@ const SimulationCanvas: React.FC = () => {
   const bodiesRef = useRef<Body[]>([]);
   const lastTimeRef = useRef(performance.now());
 
-  // ⭐ 天体の過去の位置 (軌跡) を記憶するための履歴データ
+  // 天体の過去の位置 (軌跡) を記憶するための履歴データ
   const historyRef = useRef<Record<number, { x: number, y: number }[]>>({});
+
+  // inputStringsをeditableBodiesに基づいて初期化するヘルパー関数
+  const initializeInputStrings = useCallback((bodies: Body[]) => {
+      const initialStrings: Record<number, { x: string; y: string; vx: string; vy: string; mass: string; }> = {};
+      bodies.forEach(body => {
+          initialStrings[body.id] = {
+              x: body.position.x.toString(),
+              y: body.position.y.toString(),
+              vx: body.velocity.vx.toString(),
+              vy: body.velocity.vy.toString(),
+              mass: body.mass.toString(),
+          };
+      });
+      setInputStrings(initialStrings);
+  }, []);
+
+  // リセット関数 (numBodies の変更にも対応)
+  const resetBodyNumber = useCallback(() => {
+      // 現在選択されている numBodies に基づいて新しい初期状態を生成
+      const newInitialState = getInitialState(numBodies);
+      // editableBodies を更新
+      setEditableBodies(newInitialState);
+      
+      // inputStrings を更新
+      initializeInputStrings(newInitialState);
+      // bodiesRef（シミュレーション実行状態）をコピーして再初期化
+      bodiesRef.current = newInitialState.map(body => ({
+          ...body,
+          position: { x: body.position.x, y: body.position.y },
+          velocity: { vx: body.velocity.vx, vy: body.velocity.vy },
+      }));
+      
+      historyRef.current = {}; // 軌跡履歴もクリア
+      // 停止中の場合、再実行する
+      if (!isRunning) {
+          setIsRunning(true);
+      }
+  }, [numBodies, isRunning, initializeInputStrings]); // numBodies を依存配列に追加
 
   // ⭐ リセット関数
   const resetSimulation = () => {
@@ -186,44 +250,50 @@ const SimulationCanvas: React.FC = () => {
     lastTimeRef.current = currentTime;
   };
 
-  useEffect(() => {
-    // 最初のマウント時に初期状態を設定
-    if (bodiesRef.current.length === 0) {
-        resetSimulation();
-        setIsRunning(true);
-    }
+  // useEffect: 初期化とアニメーションループの管理
+    useEffect(() => {
+        
+        // numBodiesが変更された場合、editableBodiesをリセット
+        if (numBodies !== editableBodies.length) {
+            resetBodyNumber();
+        } else if (bodiesRef.current.length === 0) {
+            // 最初のマウント時に初期状態を設定
+            resetSimulation();
+        }
 
-    // editableBodies の初期値に基づいて inputStrings を設定
-    const initialStrings: Record<number, { x: string; y: string; vx: string; vy: string; mass: string; }> = {};
-    editableBodies.forEach(body => {
-        initialStrings[body.id] = {
-            x: body.position.x.toString(),
-            y: body.position.y.toString(),
-            vx: body.velocity.vx.toString(),
-            vy: body.velocity.vy.toString(),
-            mass: body.mass.toString(),
+
+        if (isRunning) {
+            // 実行中の場合、アニメーションループを開始
+            animationRef.current = requestAnimationFrame(animate);
+        } else {
+            // 停止中の場合、アニメーションループを停止
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+                animationRef.current = null; // nullを設定して次の再開に備える
+            }
+        }
+        
+        // クリーンアップ関数
+        return () => {
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+            }
         };
-    });
-    setInputStrings(initialStrings);
+    }, [isRunning, isTracing, numBodies, animate, resetSimulation]);
 
-    if (isRunning) {
-      // 実行中の場合、アニメーションループを開始
-      animationRef.current = requestAnimationFrame(animate);
-    } else {
-      // 停止中の場合、アニメーションループを停止
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+  // 天体数変更ハンドラ
+  const handleNumBodiesChange = (count: number) => {
+      // 実行中の場合はシミュレーションを停止
+      if (isRunning) {
+          setIsRunning(false);
       }
-    }
-    
-    // クリーンアップ関数（コンポーネントがアンマウントされるとき、または状態が変更される直前）
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-    // ここではリセット操作の管理は不要だが、isRunningの変更でリセットされないよう注意
-  }, [isRunning, isTracing]);
+      // 天体数を更新し、リセットをトリガー
+      setNumBodies(count);
+      // resetSimulation は useEffect に依存しているため、numBodies 変更後に呼ばれるのが理想的。
+      // ただし、即時フィードバックのためここで呼ぶか、numBodies を依存配列に加えた useEffect に任せる。
+      // 今回は numBodies の変更時に editableBodies を更新するために resetSimulation のロジックを微調整し、
+      // resetSimulation を useEffect の依存に加える。
+  };
 
   // 新しい文字列入力ハンドラ
   const handleInputChange = (id: number, field: keyof typeof inputStrings[1], valueString: string) => {
@@ -282,7 +352,7 @@ const SimulationCanvas: React.FC = () => {
         flexDirection: 'column', 
         alignItems: 'center', 
         padding: '10px 20px 10px 20px', 
-        maxWidth: '900px',
+        maxWidth: '1200px',
         width: '100%',
         boxSizing: 'border-box',
         backgroundColor: '#1E1E1E',
@@ -320,9 +390,35 @@ const SimulationCanvas: React.FC = () => {
                 borderRadius: '5px', 
                 width: '100%', 
                 // 最大幅を再設定し、キャンバスの横に収まるようにする
-                maxWidth: '450px', 
+                maxWidth: '650px', 
             }}
         >
+            {/* 天体数選択ラジオボタン */}
+            <div style={{ marginBottom: '15px', padding: '10px', border: '1px solid #333', borderRadius: '5px' }}>
+                <p style={{ color: '#ccc', fontSize: '0.9rem', margin: '0 0 8px 0' }}>天体の数を選択:</p>
+                <label style={{ color: '#fff', marginRight: '20px', cursor: 'pointer' }}>
+                    <input 
+                        type="radio" 
+                        name="numBodies" 
+                        value={2} 
+                        checked={numBodies === 2}
+                        onChange={() => handleNumBodiesChange(2)}
+                        style={{ marginRight: '5px' }}
+                    />
+                    2体問題
+                </label>
+                <label style={{ color: '#fff', cursor: 'pointer' }}>
+                    <input 
+                        type="radio" 
+                        name="numBodies" 
+                        value={3} 
+                        checked={numBodies === 3}
+                        onChange={() => handleNumBodiesChange(3)}
+                        style={{ marginRight: '5px' }}
+                    />
+                    3体問題
+                </label>
+            </div>
             {/* メインコントロールボタン群 */}
             <div 
                 style={{ 
